@@ -1,0 +1,12 @@
+{
+  "model_name_or_path": "facebook/bart-base",
+  "data_dir": "xmc-base/eurlex-4k/",
+  "output_dir": "output/eurlex-4k/bart/",
+  "num_train_epochs": 5,
+  "batch_size": 4,
+  "learning_rate": 5e-5,
+  "max_input_length": 128,
+  "max_target_length": 64,
+  "use_fp16": true,
+  "logging_steps": 10
+}

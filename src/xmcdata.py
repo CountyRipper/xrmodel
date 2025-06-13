@@ -1,7 +1,8 @@
 # data_loader.py
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from scipy.sparse import load_npz, csr_matrix
+from tqdm import tqdm
 from transformers import AutoTokenizer
 import torch
 from torch.utils.data import Dataset
@@ -16,14 +17,45 @@ def load_sparse_matrix(path: str) -> csr_matrix:
     return load_npz(path)
 
 # 3. 加载标签编号映射
-def load_label_text_map(path: str) -> Dict[str, str]:
+def load_label_text_map(path: str) -> Dict[int, str]:
+    """"
+    Args:
+        path: str
+    Returns:
+        mapping: Dict[int, str] where keys are label ids and values are label texts
+    """
     mapping = {}
     with open(path, encoding="utf-8") as f:
-        for line in f:
-            if "->" in line:
-                key, val = line.strip().split("->", 1)
-                mapping[key] = val
+        for idx,val in enumerate(f):
+            mapping[idx] = val.strip()
     return mapping
+
+# 4. 编号转文本标签
+def csr_id_to_text(id_mat: csr_matrix, label_map: Dict[int, str]) -> Tuple[List[List[str]], List[List[int]]]:
+    """
+    Args:
+        id_mat: csr_matrix where each row contains label ids (as column indices)
+        label_map: dictionary from string label ID to label text
+
+    Returns:
+        Tuple:
+            - List of lists of label texts for each row
+            - List of lists of label indices (integers) for each row
+    """
+    all_label_texts = []
+    all_label_indices = []
+
+    for i in range(id_mat.shape[0]):
+        start = id_mat.indptr[i]
+        end = id_mat.indptr[i + 1]
+        indices = id_mat.indices[start:end]  # 1D array of column indices (label ids)
+
+        all_label_indices.append(indices.tolist())
+        all_label_texts.append([label_map.get(idx, "Unknown") for idx in indices])
+
+    return all_label_texts, all_label_indices
+    
+    
 
 # 4. 文本 tokenizer 封装器
 class TextTokenizer:
