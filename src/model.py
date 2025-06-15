@@ -1,5 +1,5 @@
 from typing import List, Tuple
-from transformers import AutoModelForSeq2SeqLM, PreTrainedTokenizerBase, PreTrainedModel,AutoTokenizer,Seq2SeqTrainer, Seq2SeqTrainingArguments, DataCollatorForSeq2Seq
+from transformers import AutoModelForSeq2SeqLM, PreTrainedTokenizerBase, PreTrainedModel,AutoTokenizer,Seq2SeqTrainer, Seq2SeqTrainingArguments, DataCollatorForSeq2Seq,T5Tokenizer
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -50,7 +50,10 @@ class Seq2SeqModel(nn.Module):
         self.config = config
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model: PreTrainedModel = AutoModelForSeq2SeqLM.from_pretrained(config.model_name_or_path,cache_dir="./cache").to(self.device)
-        self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(config.model_name_or_path,cache_dir="./cache")
+        if self.config.model_name_or_path.startswith('t5'):
+            self.tokenizer: PreTrainedTokenizerBase = T5Tokenizer.from_pretrained(config.model_name_or_path,cache_dir="./cache", use_fast=True)
+        else:
+            self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(config.model_name_or_path,cache_dir="./cache")
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
         return self.model(

@@ -5,7 +5,7 @@
 
   "num_train_epochs": 5,
   "batch_size": 4,
-  "learning_rate": 5e-5,
+  "learning_rate": 1e-5,
   "use_fp16": true,
   "logging_steps": 20,
   "weight_decay": 0.01,

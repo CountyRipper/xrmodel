@@ -38,12 +38,22 @@ def load_xmc_seq2seq_dataset(
             truncation=True,
             padding="max_length"
         )
-        labels = tokenizer(
-            text_target=batch["output"],
-            max_length=max_length,
-            truncation=True,
-            padding="max_length"
-        )
+    
+        # 编码 target
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(
+                batch["output"],
+                max_length=max_length,
+                truncation=True,
+                padding="max_length"
+            )
+    
+        # 替换 padding token 为 -100，用于 loss 忽略
+        labels["input_ids"] = [
+            [(token if token != tokenizer.pad_token_id else -100) for token in label]
+            for label in labels["input_ids"]
+        ]
+    
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 

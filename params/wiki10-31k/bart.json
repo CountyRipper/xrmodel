@@ -1,16 +1,16 @@
 {
-  "model_name_or_path": "facebook/bart-large",
+  "model_name_or_path": "facebook/bart-base",
   "max_input_length": 256,
-  "max_output_length": 80,
+  "max_output_length": 64,
 
   "num_train_epochs": 5,
-  "batch_size": 4,
-  "learning_rate": 5e-5,
+  "batch_size": 8,
+  "learning_rate": 1e-5,
   "use_fp16": true,
   "logging_steps": 20,
   "weight_decay": 0.01,
   "warmup_ratio": 0.1,
 
   "use_tensorboard": true,
-  "num_beams": 4
+  "num_beams": 5
 }

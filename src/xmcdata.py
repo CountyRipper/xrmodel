@@ -9,8 +9,8 @@ from torch.utils.data import Dataset
 
 # 1. 加载文本数据
 def load_texts(path: str) -> List[str]:
-    with open(path, encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
+    with open(path, 'r') as f:
+        return [line.strip() for line in f ]
 
 # 2. 加载稀疏矩阵（X.tfidf.npz or Y.npz）
 def load_sparse_matrix(path: str) -> csr_matrix:
