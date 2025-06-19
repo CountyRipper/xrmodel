@@ -4,7 +4,7 @@ scikit_learn==1.7.0
 scipy==1.15.3
 torch==2.7.1
 tqdm==4.67.1
-transformers==4.41.1
+transformers==4.52.3
 jupyterlab==4.4.3
 accelerate==1.7.0
 tensorboard==2.19.0

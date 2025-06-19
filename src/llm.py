@@ -1,14 +1,13 @@
 import torch
-import pandas as pd
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from tqdm import tqdm
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM, 
-    TrainingArguments, Trainer, DataCollatorForLanguageModeling,
+    TrainingArguments, Trainer, DataCollatorForLanguageModeling,DataCollatorWithPadding,
     BitsAndBytesConfig
 )
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, Features, Sequence, Value
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import bitsandbytes as bnb
 from torch.utils.data import DataLoader
@@ -29,6 +28,7 @@ class ModelConfig:
     logging_steps: int = 50
     save_steps: int = 500
     output_dir: str = "./results"
+    use_tensorboard: bool = True  # 是否使用TensorBoard记录训练日志
     
     # LoRA配置
     lora_r: int = 16
@@ -45,8 +45,7 @@ class ModelConfig:
 
 class DataProcessor:
     """数据处理类"""
-    def __init__(self, tokenizer, max_length_input: int = 256, max_length_output: int = 128, max_length: int = 512,
-                 prompt_template: str = None, res_template: str = None):
+    def __init__(self, tokenizer, max_length_input: int = 256, max_length_output: int = 128, max_length: int = 512,prompt_template: str = None, res_template: str = None):
         self.tokenizer = tokenizer
         self.max_length_input = max_length_input
         self.max_length_output = max_length_output
@@ -66,7 +65,7 @@ class DataProcessor:
                 "Summary of this paragraph by keyphrases: {keyphrases}"
             )
     
-    def prepare_data_from_lists(self, documents: List[str], keyphrases: List[str]) -> Dataset:
+    def _prepare_data_from_lists(self, documents: List[str], keyphrases: List[str]) -> Dataset:
         """从列表数据准备训练数据集"""
         data = []
         for doc, kp in zip(documents, keyphrases):
@@ -79,17 +78,19 @@ class DataProcessor:
             })
         return Dataset.from_list(data)
     
-    def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
+    def _tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
         input_texts = examples["input_text"]
         output_texts = examples["output_text"]
         if len(input_texts) != len(output_texts):
             raise ValueError("Input texts and output texts must have the same length.")
         input_ids_batch = []
         labels_batch = []
+        self.tokenizer.padding_side = "right"  # 确保padding在右侧
         for input, output in zip(input_texts, output_texts):
             # 不使用tensor,使用list
             input_encode = self.tokenizer(
                 input,
+                padding="max_length",
                 truncation=True,
                 max_length=self.max_length_input,
                 add_special_tokens=False
@@ -97,6 +98,7 @@ class DataProcessor:
             output_encode = self.tokenizer(
                 output,
                 truncation=True,
+                padding="max_length",
                 max_length=self.max_length_output,
                 add_special_tokens=False
             )
@@ -104,26 +106,36 @@ class DataProcessor:
             output_ids = output_encode["input_ids"]
             #手动拼接input_ids和output_ids
             full_input_ids = input_ids + output_ids
-            #labels处理,lebels逻辑为仅保留output的ids为实际值，其余为-100
-            labels = [-100] * len(input_ids) + output_ids
+            # 生成labels
+            labels = [-100] * len(input_ids) + [token if token!= self.tokenizer.pad_token_id else -100 for token in output_ids]
             input_ids_batch.append(full_input_ids)
             labels_batch.append(labels)
         return {
             "input_ids": input_ids_batch,
-            "labels": labels_batch
+            "labels": labels_batch,
+            #"attention_mask": [[1] * len(ids) for ids in input_ids_batch]  # 添加attention_mask
         }
 
-    def prepare_dataset(self, documents: List[str], keyphrases: List[str]) -> Dataset:
-        mydataset = self.prepare_data_from_lists(documents, keyphrases)
+    def prepare_dataset(self, documents: List[str], keyphrases: List[str], num_proc: int =4,
+                        batch_size: int = 8) -> Dataset:
+        mydataset = self._prepare_data_from_lists(documents, keyphrases)
         # 使用map函数进行tokenize
         tokenized_dataset = mydataset.map(
-            self.tokenize_function,
+            self._tokenize_function,
             batched=True,
-            batch_size=8,  # 可以根据内存大小调整
-            num_proc=4,  # 并行处理的进程数
+            batch_size=batch_size,  # 可以根据内存大小调整
+            num_proc= num_proc,  # 并行处理的进程数
             remove_columns=mydataset.column_names,
             desc="Tokenizing dataset"
         )
+        features = Features({
+            "input_ids": Sequence(Value(dtype="int32")),
+            "labels": Sequence(Value(dtype="int32")),
+            #"attention_mask": Sequence(Value(dtype="int32"))
+            })
+
+        tokenized_dataset = tokenized_dataset.cast(features)
+        return tokenized_dataset
     def save_dataset(self, dataset: Dataset, save_path: str):
         """保存数据集到指定路径"""
         dataset.save_to_disk(save_path)
@@ -133,6 +145,14 @@ class DataProcessor:
         dataset = Dataset.load_from_disk(load_path)
         print(f"Dataset loaded from {load_path}")
         return dataset
+    
+class PeftTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # 👈 添加 **kwargs
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        loss = outputs.loss if hasattr(outputs, "loss") else outputs["loss"]
+        return (loss, outputs) if return_outputs else loss
+
 class LLMTrainer:
     """LLM训练器类"""
     
@@ -192,10 +212,10 @@ class LLMTrainer:
             lora_dropout=self.config.lora_dropout,
             target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # 根据模型调整
         )
-        
+        self.model.enable_input_require_grads()
         self.model = get_peft_model(self.model, lora_config)
         self.model.print_trainable_parameters()
-        
+        #self.model.config.use_cache = False  # LoRA模型不需要cache
         print("LoRA configuration applied successfully!")
     
     def prepare_training_args(self) -> TrainingArguments:
@@ -208,43 +228,50 @@ class LLMTrainer:
             per_device_eval_batch_size=self.config.batch_size,
             warmup_steps=self.config.warmup_steps,
             logging_steps=self.config.logging_steps,
-            save_steps=self.config.save_steps,
-            eval_steps=self.config.save_steps,
-            save_strategy="steps",
-            eval_strategy="steps",       
+            # save_steps=self.config.save_steps,
+            # eval_steps=self.config.save_steps,
+            save_strategy="epoch",
+            eval_strategy="epoch",       
             load_best_model_at_end=True,
             learning_rate=self.config.learning_rate,
             fp16=self.config.quantization_type == "fp16",
             bf16=False,
             gradient_checkpointing=True,
             dataloader_drop_last=False,
-            report_to=None,
-            
+            logging_dir=f"./{self.config.output_dir}/logs",
+            report_to=["tensorboard"] if self.config.use_tensorboard else [],
+            save_total_limit=1,
+            remove_unused_columns= False
         )
     
-    def train(self, train_dataset: Dataset, eval_dataset: Optional[Dataset] = None):
+    def train(self, train_dataset: Dataset, eval_dataset: Optional[Dataset] = None, output_dir: str = None):
         """训练模型"""
         print("Starting training...")
         
         # 数据整理器
-        data_collator = DataCollatorForLanguageModeling(
+        data_collator = DataCollatorWithPadding(
             tokenizer=self.tokenizer,
-            mlm=False,
+            padding=True,
+            max_length=self.config.max_length,
         )
+        # data_collator = DataCollatorForLanguageModeling(
+        #     tokenizer=self.tokenizer,
+        #     mlm=False,
+        # )
         
         # 训练参数
         training_args = self.prepare_training_args()
-        
+        self.model.config.use_cache = False  # 必须显式关闭
         # 创建trainer
-        trainer = Trainer(
+        trainer = PeftTrainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             data_collator=data_collator,
-            tokenizer=self.tokenizer,
+            tokenizer=self.tokenizer
         )
-        
+        print("self.model.training: ",self.model.training)
         # 开始训练
         trainer.train()
         
@@ -334,19 +361,11 @@ class KeyphrasePredictor:
                 # 解码输出
                 generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
                 
-                # 提取生成的关键词部分
-                keyphrase_start = generated_text.find("Summary of this paragraph by keyphrases: ")
-                if keyphrase_start != -1:
-                    keyphrase_start += len("Summary of this paragraph by keyphrases: ")
-                    keyphrases = generated_text[keyphrase_start:].strip()
-                else:
-                    keyphrases = generated_text[len(input_text):].strip()
-                
-                predictions.append(keyphrases)
+                predictions.append(generated_text)
         
         return predictions
     
-    def batch_predict(self, documents: List[str], batch_size: int = 4, max_new_tokens: int = 100) -> List[str]:
+    def batch_predict(self, documents: List[str], batch_size: int = 4, max_new_tokens: int = 100,data_dir:str = None) -> List[str]:
         """批量预测（带进度条）"""
         predictions = []
         
@@ -355,4 +374,12 @@ class KeyphrasePredictor:
             batch_predictions = self.predict(batch_docs, max_new_tokens)
             predictions.extend(batch_predictions)
         
+        if data_dir:
+            output_file = f"{data_dir}/predictions.txt"
+            with open(output_file, 'w') as f:
+                for pred in predictions:
+                    f.write(pred + "\n")
+            print(f"Predictions saved to {output_file}")
         return predictions
+    
+    
