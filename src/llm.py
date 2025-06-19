@@ -45,8 +45,7 @@ class ModelConfig:
 
 class DataProcessor:
     """数据处理类"""
-    
-    def __init__(self, tokenizer, max_length_input: int = 256, max_length_output: int = 128,
+    def __init__(self, tokenizer, max_length_input: int = 256, max_length_output: int = 128, max_length: int = 512,
                  prompt_template: str = None, res_template: str = None):
         self.tokenizer = tokenizer
         self.max_length_input = max_length_input
@@ -80,75 +79,60 @@ class DataProcessor:
             })
         return Dataset.from_list(data)
     
-    def tokenize_function(self, examples):
-        """批量tokenize加速版本"""
-        # 1. 批量tokenize input和output
-        input_encodings = self.tokenizer(
-            examples["input_text"],
-            truncation=True,
-            max_length=self.max_length_input,
-            padding=False,  # 不padding，保留真实长度信息
-            add_special_tokens=False,
-            return_tensors=None
-        )
-        
-        output_encodings = self.tokenizer(
-            examples["output_text"],
-            truncation=True,
-            max_length=self.max_length_output,
-            padding=False,  # 不padding，保留真实长度信息
-            add_special_tokens=False,
-            return_tensors=None
-        )
-        
-        # 2. 手动处理padding，保留真实长度信息
-        batch_size = len(examples["input_text"])
-        max_input_len = max(len(ids) for ids in input_encodings["input_ids"])
-        max_output_len = max(len(ids) for ids in output_encodings["input_ids"])
-        
-        # 确保不超过预设的最大长度
-        max_input_len = min(max_input_len, self.max_length_input)
-        max_output_len = min(max_output_len, self.max_length_output)
-        
-        # 手动padding input和output
-        input_ids_array = np.full((batch_size, max_input_len), self.tokenizer.pad_token_id, dtype=np.int64)
-        input_attention_array = np.zeros((batch_size, max_input_len), dtype=np.int64)
-        output_ids_array = np.full((batch_size, max_output_len), self.tokenizer.pad_token_id, dtype=np.int64)
-        output_attention_array = np.zeros((batch_size, max_output_len), dtype=np.int64)
-        
-        for i in range(batch_size):
-            input_len = len(input_encodings["input_ids"][i])
-            output_len = len(output_encodings["input_ids"][i])
-            
-            # 填充实际tokens
-            input_ids_array[i, :input_len] = input_encodings["input_ids"][i]
-            input_attention_array[i, :input_len] = 1
-            
-            output_ids_array[i, :output_len] = output_encodings["input_ids"][i]
-            output_attention_array[i, :output_len] = 1
-        
-        # 3. 拼接input和output
-        input_ids = np.concatenate([input_ids_array, output_ids_array], axis=1)
-        
-        # 4. 构造attention_mask: input有效部分 + output有效部分
-        attention_mask = np.concatenate([input_attention_array, output_attention_array], axis=1)
-        
-        # 5. 构造labels: input部分全部-100, output部分保留有效token
-        total_length = max_input_len + max_output_len
-        labels = np.full((batch_size, total_length), -100, dtype=np.int64)
-        
-        # output部分：有效token保留，padding部分保持-100
-        labels[:, max_input_len:] = np.where(
-            output_attention_array == 1,  # 如果是有效token
-            output_ids_array,             # 使用实际token id
-            -100                          # 否则保持-100
-        )
-        
+    def tokenize_function(self, examples: Dict[str, Any]) -> Dict[str, Any]:
+        input_texts = examples["input_text"]
+        output_texts = examples["output_text"]
+        if len(input_texts) != len(output_texts):
+            raise ValueError("Input texts and output texts must have the same length.")
+        input_ids_batch = []
+        labels_batch = []
+        for input, output in zip(input_texts, output_texts):
+            # 不使用tensor,使用list
+            input_encode = self.tokenizer(
+                input,
+                truncation=True,
+                max_length=self.max_length_input,
+                add_special_tokens=False
+            )
+            output_encode = self.tokenizer(
+                output,
+                truncation=True,
+                max_length=self.max_length_output,
+                add_special_tokens=False
+            )
+            input_ids = input_encode["input_ids"]
+            output_ids = output_encode["input_ids"]
+            #手动拼接input_ids和output_ids
+            full_input_ids = input_ids + output_ids
+            #labels处理,lebels逻辑为仅保留output的ids为实际值，其余为-100
+            labels = [-100] * len(input_ids) + output_ids
+            input_ids_batch.append(full_input_ids)
+            labels_batch.append(labels)
         return {
-            "input_ids": input_ids.tolist(),
-            "attention_mask": attention_mask.tolist(),
-            "labels": labels.tolist()
+            "input_ids": input_ids_batch,
+            "labels": labels_batch
         }
+
+    def prepare_dataset(self, documents: List[str], keyphrases: List[str]) -> Dataset:
+        mydataset = self.prepare_data_from_lists(documents, keyphrases)
+        # 使用map函数进行tokenize
+        tokenized_dataset = mydataset.map(
+            self.tokenize_function,
+            batched=True,
+            batch_size=8,  # 可以根据内存大小调整
+            num_proc=4,  # 并行处理的进程数
+            remove_columns=mydataset.column_names,
+            desc="Tokenizing dataset"
+        )
+    def save_dataset(self, dataset: Dataset, save_path: str):
+        """保存数据集到指定路径"""
+        dataset.save_to_disk(save_path)
+        print(f"Dataset saved to {save_path}")
+    def load_dataset(self, load_path: str) -> Dataset:
+        """从指定路径加载数据集"""
+        dataset = Dataset.load_from_disk(load_path)
+        print(f"Dataset loaded from {load_path}")
+        return dataset
 class LLMTrainer:
     """LLM训练器类"""
     
