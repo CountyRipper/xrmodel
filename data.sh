@@ -40,6 +40,7 @@ if wget -nc "${DOWNLOAD_BASE_URL}/${DATASET}.tar.gz" -P "$DATASET_DIR"; then
         rm "${DATASET_DIR}/${DATASET}.tar.gz"
 
         echo "preparing dataset to csv format..."
+        export PYTHONPATH=.
         python3 ./src/data.py --dataset_name "$DATASET"
         
         echo "dataset ${DATASET} cleaned"

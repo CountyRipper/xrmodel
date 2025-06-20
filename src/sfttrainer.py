@@ -1,12 +1,30 @@
 from dataclasses import dataclass
 from typing import Optional
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments,BitsAndBytesConfig
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM,SFTConfig
 import torch
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import bitsandbytes as bnb
+from torch.utils.data import DataLoader
+class DebugCollator(DataCollatorForCompletionOnlyLM):
+    def torch_call(self, examples):
+        batch = super().torch_call(examples)
 
+        # 打印第一个样本（只打印前几个 token）
+        input_ids = batch["input_ids"][0].tolist()
+        labels = batch["labels"][0].tolist()
+        decoded_input = self.tokenizer.decode(input_ids, skip_special_tokens=False)
+        decoded_label = self.tokenizer.decode([i for i in labels if i != -100], skip_special_tokens=False)
+
+        print("\n🟩 [DEBUG] First Sample in Batch")
+        print("Input IDs:", input_ids[:50])
+        print("Decoded Input:", decoded_input[:200])
+        print("Label IDs:", labels[:50])
+        print("Decoded Label (only label tokens):", decoded_label[:200])
+        print("--------------------------------------------------\n")
+
+        return batch
 @dataclass
 class ModelConfig:
     """模型配置类"""
@@ -32,7 +50,7 @@ class ModelConfig:
     quantization_type: str = "int4"  # "int4", "int8", "fp16", "fp32"
 
     # template
-    prompt_template: str = "Summarize this paragraph by keyphrases: {document}\n"
+    prompt_template: str = "Summarize this paragraph by keyphrases: {text}\n"
     max_new_tokens: int = 100  # 生成时的最大新token数
 
 
@@ -42,9 +60,8 @@ class Sft_trainer:
         self.data_dir = data_dir
         print("Initializing SFTTrainer with model:", self.config.model_name)
         print("Data directory:", self.data_dir)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True)
-        self.config = config
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(self.config.model_name, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True)
         
 
     def load_dataset(self):
@@ -54,9 +71,10 @@ class Sft_trainer:
         example["labels"] = example["labels"].split(",")
         return example
     def _format_prompt(self, example):
-        prompt = self.config.prompt_template+ "\nAnswer:"
+        prompt = self.config.prompt_template.format(document=example["document"]) + "\nAnswer:"
         response = ", ".join(example["labels"])
-        return {"prompt": prompt, "completion": response}
+        # SFTTrainer 和 DataCollatorForCompletionOnlyLM 会一起处理这个 'text' 字段
+        return {"text": f"{prompt}{response}"}
     def setup_quantization(self) -> Optional[BitsAndBytesConfig]:
         """设置量化配置"""
         if not self.config.use_quantization:
@@ -100,16 +118,28 @@ class Sft_trainer:
         dataset = dataset.map(self._format_prompt)
         
         # 标准化字段名
-        dataset = dataset.rename_columns({"prompt": "document", "completion": "completion"})
-        
+        #dataset = dataset.rename_columns({"prompt": "text", "completion": "completion"})
+        # 检查样本（现在只有一个 'text' 字段）
+        print("check batch sample")
+        sample = dataset["train"][0]
+        print("sample['text']:", sample['text'])
         # 数据 collator
-        collator = DataCollatorForCompletionOnlyLM(tokenizer=self.tokenizer, instruction_template="Summarize this paragraph by keyphrases: {document}\n", response_template="Answer:")
+        #collator = DebugCollator(tokenizer=self.tokenizer, instruction_template="Summarize this paragraph by keyphrases: {document}\n", response_template="Answer:")
+        collator = DataCollatorForCompletionOnlyLM(
+            tokenizer=self.tokenizer,
+            max_length=self.config.max_length,
+            #max_length=self.config.max_length,
+            return_tensors="pt",
+            response_template="Answer:"
+        )
         self.setup_lora()  # 设置LoRA配置
         self.setup_quantization()  # 设置量化配置
-        print("setting trainer args")
-        # 训练参数
-        args = TrainingArguments(
+        
+
+        sft_config = SFTConfig(
             output_dir=self.config.output_dir,
+            max_seq_length=self.config.max_length,
+            overwrite_output_dir=True,
             per_device_train_batch_size=self.config.batch_size,
             per_device_eval_batch_size=self.config.batch_size,
             logging_steps=self.config.logging_steps,
@@ -126,20 +156,24 @@ class Sft_trainer:
             dataloader_drop_last=False,
             logging_dir=f"./{self.config.output_dir}/logs",
             report_to=["tensorboard"] if self.config.use_tensorboard else [],
-            remove_unused_columns=False,
+            remove_unused_columns=True
         )
-        
+        #formatting_func=lambda x: f"{x['text']}{x['completion']}"
         # 初始化 SFTTrainer
+        self.tokenizer.padding_side = "right"
         trainer = SFTTrainer(
+            args=sft_config,
             model=self.model,
             train_dataset=dataset["train"],
             eval_dataset=dataset["test"],
-            tokenizer=self.tokenizer,
-            args=args,
             data_collator=collator,
-            max_seq_length=512,
-            formatting_func=lambda x: f"{x['document']}{x['completion']}"
+            dataset_text_field="text",
+            #processing_class=self.tokenizer,
+            label_names=["completion"]
+            #processing_class=self.tokenizer,
+            #formatting_func=formatting_func,
         )
+        
         
         # 启动训练
         trainer.train()
@@ -201,7 +235,7 @@ class Sft_trainer:
             f = open(output_dir + self.config.model_name+"_pred.txt", "w", encoding="utf-8")
             f.close()
         for example in tqdm(test_dataset, desc="Generating"):
-            prompt = prompt.replace("{document}", example["document"])
+            prompt = prompt.replace("{text}", example["document"])
             prediction = self.generate_answer(prompt, max_new_tokens=max_new_tokens)
             if output_dir:
                 with open(output_dir + self.config.model_name+"_pred.txt", "a", encoding="utf-8") as f:
@@ -223,42 +257,42 @@ if __name__ == "__main__":
     model_name = args.model_name
     data_dir = f"xmc-base/{dataset_name}/"
 
-    modelconfig = ModelConfig(
-        model_name=model_name,
-        output_dir=f"./output/{dataset_name}/{model_name}",
-        prompt_template="Summarize this paragraph by keyphrases: {document}\n",
-        max_new_tokens=128,  # 生成的最大新令牌数
-        batch_size=4,
-        learning_rate=2e-4,
-        warmup_steps=100,
-        warmup_ratio=0.1,
-        num_epochs=4,
-        use_tensorboard=True,
-        lora_r=16,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        use_quantization=False,  # 是否使用量化
-        quantization_type="int4"  # 可选: "int4", "int8", "fp16", "fp32"
-    )
+    # modelconfig = ModelConfig(
+    #     model_name=model_name,
+    #     output_dir=f"./output/{dataset_name}/{model_name}",
+    #     prompt_template="Summarize this paragraph by keyphrases: {document}\n",
+    #     max_new_tokens=128,  # 生成的最大新令牌数
+    #     batch_size=4,
+    #     learning_rate=2e-4,
+    #     warmup_steps=100,
+    #     warmup_ratio=0.1,
+    #     num_epochs=4,
+    #     use_tensorboard=True,
+    #     lora_r=16,
+    #     lora_alpha=32,
+    #     lora_dropout=0.1,
+    #     use_quantization=False,  # 是否使用量化
+    #     quantization_type="int4"  # 可选: "int4", "int8", "fp16", "fp32"
+    # )
 
 
-    trainer = Sft_trainer(modelconfig, data_dir=data_dir)
-    print("Starting SFT training...")
-    # 1. 加载数据集
-    dataset = trainer.load_dataset()
-    print("Dataset loaded successfully")
+    # trainer = Sft_trainer(modelconfig, data_dir=data_dir)
+    # print("Starting SFT training...")
+    # # 1. 加载数据集
+    # dataset = trainer.load_dataset()
+    # print("Dataset loaded successfully")
     
-    trainer.train(dataset=dataset)
-    print("Training completed successfully")
+    # trainer.train(dataset=dataset)
+    # print("Training completed successfully")
 
-    # 预测
-    print("Starting batch generation...")
-    trainer.batch_generate(
-        test_dataset=dataset["test"],
-        prompt=modelconfig.prompt_template,
-        max_new_tokens=modelconfig.max_new_tokens,
-        output_dir=data_dir
-    )
+    # # 预测
+    # print("Starting batch generation...")
+    # trainer.batch_generate(
+    #     test_dataset=dataset["test"],
+    #     prompt=modelconfig.prompt_template,
+    #     max_new_tokens=modelconfig.max_new_tokens,
+    #     output_dir=data_dir
+    # )
     
 
     
