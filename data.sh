@@ -38,6 +38,9 @@ if wget -nc "${DOWNLOAD_BASE_URL}/${DATASET}.tar.gz" -P "$DATASET_DIR"; then
         mv "${DATASET_DIR}/xmc-base/${DATASET}" "$DATASET_DIR/"
         rm -rf "${DATASET_DIR}/xmc-base"
         rm "${DATASET_DIR}/${DATASET}.tar.gz"
+
+        echo "preparing dataset to csv format..."
+        python3 ./src/data.py --dataset_name "$DATASET"
         
         echo "dataset ${DATASET} cleaned"
     else
