@@ -228,8 +228,7 @@ class LLMTrainer:
             per_device_eval_batch_size=self.config.batch_size,
             warmup_steps=self.config.warmup_steps,
             logging_steps=self.config.logging_steps,
-            # save_steps=self.config.save_steps,
-            # eval_steps=self.config.save_steps,
+
             save_strategy="epoch",
             eval_strategy="epoch",       
             load_best_model_at_end=True,
