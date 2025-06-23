@@ -400,7 +400,7 @@ class UniversalT2TModel:
         print("Starting training with T5-style strict standards...")
         
         # Load datasets
-        train_dataset, _ = self.load_datasets()
+        train_dataset, val_dataset = self.load_datasets()
         
         # Setup training arguments
         training_args = TrainingArguments(
@@ -430,6 +430,7 @@ class UniversalT2TModel:
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
+            eval_dataset= val_dataset,
             processing_class=self.tokenizer.tokenizer,  # Use underlying tokenizer
         )
         
