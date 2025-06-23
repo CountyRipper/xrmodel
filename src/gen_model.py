@@ -248,7 +248,7 @@ class CustomDataset(Dataset):
         data = torch.load(file_path)
         self.input_ids     = data['input_ids']
         self.attention_masks = data['attention_masks']
-        self.labels        = data.get('labels', None)
+        self.labels        = data['labels']
         print(f"Loaded {len(self.input_ids)} samples from cache")
     
     def _clean_data_t5_style(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -311,7 +311,7 @@ class CustomDataset(Dataset):
         return {
             "input_ids": self.input_ids[idx],
             "attention_mask": self.attention_masks[idx],
-            "labels": self.labels[idx] if self.is_training else None
+            "labels": self.labels[idx]
         }
 
 class UniversalT2TModel:
@@ -449,7 +449,8 @@ class UniversalT2TModel:
                            batch_size: int = None,
                            output_path: str = None,
                            max_output_length: int = None,
-                           num_beams: int = None) -> List[str]:
+                           num_beams: int = None,
+                           is_train: bool = False) -> List[str]:
         """
         Generate predictions with T5-style strict processing and real-time file writing
         """
@@ -465,7 +466,9 @@ class UniversalT2TModel:
         
         # Prepare output file
         if output_path:
-            output_file = Path(output_path) / f"gen_pred_{str(self.config.model_name).split('/')[-1]}.txt"
+            output_file = Path(output_path) / f"test_gen_pred_{str(self.config.model_name).split('/')[-1]}.txt"
+            if is_train:
+                output_file = Path(output_path) / f"train_gen_pred_{str(self.config.model_name).split('/')[-1]}.txt"
             # Create directory if it doesn't exist
             output_file.parent.mkdir(parents=True, exist_ok=True)
             # Clear file
@@ -573,6 +576,27 @@ class UniversalT2TModel:
         
         return predictions
     
+    def predict_train_set(self, output_path: str = None):
+        """Generate predictions for the test set with T5-style processing"""
+        # Load test dataset
+        _, test_dataset = self.load_datasets()
+        
+        # Extract documents from test dataset (with T5-style cleaning already applied)
+        test_data = pd.read_csv(Path(self.config.dataset_dir) / "train.csv")
+        documents = test_data["document"].astype(str).fillna("").tolist()
+        
+        # Generate predictions
+        if output_path is None:
+            output_path = self.config.output_dir
+        
+        predictions = self.generate_predictions(
+            documents, 
+            output_path=output_path,
+            is_train=True
+        )
+        
+        return predictions
+    
     def save_config(self):
         """Save configuration to JSON file"""
         config_path = Path(self.config.output_dir) / "config.json"
@@ -589,7 +613,7 @@ def main():
     
     # Example configurations for different models
     data_dir = "./xmc-base/"
-    dataset_name = "eurlex-4k/"
+    dataset_name = "wiki10-31k"
     dataset_dir = data_dir+dataset_name
     model_names = [
         "google/flan-t5-base",  # T5-base
@@ -602,7 +626,7 @@ def main():
     t5_config = T2TConfig(
         model_name=model_names[1],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"outputs/"+model_names   [1].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names   [1].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         #task_prefix="classify:",  # T5-style task  prefix
         num_epochs=5,
@@ -619,7 +643,7 @@ def main():
     bart_config = T2TConfig(
         model_name=model_names[3],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"outputs/"+model_names   [3].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names   [3].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,
@@ -635,7 +659,7 @@ def main():
     pegasus_config = T2TConfig(
         model_name=model_names[4],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"outputs/"+model_names   [4].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names   [4].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,  # Smaller batch for Pegasus
