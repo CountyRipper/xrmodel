@@ -8,7 +8,6 @@ from transformers import (
     BartTokenizer,
     PegasusForConditionalGeneration,
     PegasusTokenizer,
-    AdamW,
     get_linear_schedule_with_warmup,
     TrainingArguments,
     Trainer
@@ -33,7 +32,6 @@ class T2TConfig:
     # Data configuration
     dataset_dir: str = "./xmc-base/"
     output_dir: str = "./outputs"
-    
     # Prompt configuration - T5 style strict formatting
     prompt: str = "Please analyze the following document and provide the appropriate label:"
     task_prefix: str = ""  # For T5: "summarize:", "translate:", etc.
@@ -41,8 +39,9 @@ class T2TConfig:
     # Training configuration
     num_epochs: int = 3
     batch_size: int = 8
-    learning_rate: float = 5e-5
-    warmup_steps: int = 500
+    learning_rate: float = 1e-5
+    warmup_steps: int = 200
+    warmup_ratio: float = 0.1
     max_input_length: int = 512
     max_output_length: int = 128
     
@@ -67,6 +66,8 @@ class T2TConfig:
     gradient_accumulation_steps: int = 1
     fp16: bool = True
     seed: int = 42
+    bf16: bool = False
+    use_tensorboard: bool = True
 
 class UniversalTokenizer:
     """Universal tokenizer wrapper that applies T5-style strict standards to all models"""
@@ -205,11 +206,14 @@ class UniversalTokenizer:
 class CustomDataset(Dataset):
     """Universal dataset class for CSV files with strict T5-style processing"""
     
-    def __init__(self, csv_file: str, tokenizer: UniversalTokenizer, config: T2TConfig, is_training: bool = True):
+    def __init__(self, csv_file: str, tokenizer: UniversalTokenizer, config: T2TConfig, is_training: bool = True, cache_file: str = None):
         self.tokenizer = tokenizer
         self.config = config
         self.is_training = is_training
-        
+        if cache_file and os.path.exists(cache_file):
+            print(f"Loading tokenized data from cache:{cache_file}")
+            self.load_cache(cache_file)
+            return
         # Load CSV data with strict validation
         print(f"Loading data from {csv_file}...")
         self.data = pd.read_csv(csv_file)
@@ -226,6 +230,26 @@ class CustomDataset(Dataset):
         
         # Tokenize data with progress bar using strict standards
         self._tokenize_data_strict()
+        # if has cache_file
+        if cache_file:
+            self.save_cache(cache_file)
+    
+    def save_cache(self, file_path: str):
+        """把 tokenize 后的 tensors 列表保存到磁盘"""
+        torch.save({
+            'input_ids': self.input_ids,
+            'attention_masks': self.attention_masks,
+            'labels':       self.labels,
+        }, file_path)
+        print(f"Tokenized data saved to {file_path}")
+
+    def load_cache(self, file_path: str):
+        """从磁盘读取 tokenized 数据，跳过 CSV/clean/tokenize"""
+        data = torch.load(file_path)
+        self.input_ids     = data['input_ids']
+        self.attention_masks = data['attention_masks']
+        self.labels        = data.get('labels', None)
+        print(f"Loaded {len(self.input_ids)} samples from cache")
     
     def _clean_data_t5_style(self, data: pd.DataFrame) -> pd.DataFrame:
         """Apply T5-style strict data cleaning"""
@@ -281,7 +305,7 @@ class CustomDataset(Dataset):
             self.labels.append(labels)
     
     def __len__(self):
-        return len(self.data)
+        return len(self.input_ids)
     
     def __getitem__(self, idx):
         return {
@@ -357,6 +381,7 @@ class UniversalT2TModel:
             str(train_file), 
             self.tokenizer, 
             self.config, 
+            cache_file= self.config.dataset_dir+"/train.pt",
             is_training=True
         )
         
@@ -364,6 +389,7 @@ class UniversalT2TModel:
             str(test_file), 
             self.tokenizer, 
             self.config, 
+            cache_file= self.config.dataset_dir+"/test.pt",
             is_training=False
         )
         
@@ -382,17 +408,21 @@ class UniversalT2TModel:
             num_train_epochs=self.config.num_epochs,
             per_device_train_batch_size=self.config.batch_size,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            warmup_steps=self.config.warmup_steps,
+            #warmup_steps=self.config.warmup_steps,
+            warmup_ratio=self.config.warmup_ratio,
             learning_rate=self.config.learning_rate,
             fp16=self.config.fp16,
             logging_steps=self.config.logging_steps,
             save_steps=self.config.save_steps,
+            logging_dir=self.config.output_dir,
             #eval_steps=self.config.eval_steps,
             save_total_limit= self.config.save_total_limit,
             save_strategy=self.config.save_strategy,
+            eval_strategy= self.config.evaluation_strategy,
             remove_unused_columns=False,
             push_to_hub=False,
-            report_to=None,
+            bf16= self.config.bf16,
+            report_to=["tensorboard"] if self.config.use_tensorboard else []
         )
         
         # Setup trainer
