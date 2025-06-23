@@ -588,7 +588,7 @@ def main():
     
     # Example configurations for different models
     data_dir = "./xmc-base/"
-    dataset_name = "eurlex-4k"
+    dataset_name = "eurlex-4k/"
     dataset_dir = data_dir+dataset_name
     model_names = [
         "google/flan-t5-base",  # T5-base
@@ -599,42 +599,51 @@ def main():
     ]
     # T5-FLAN Configuration
     t5_config = T2TConfig(
-        model_name=model_names[0],  # Change to other models as needed
+        model_name=model_names[1],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=data_dir+"outputs/"+model_names[0].split("/")[-1],
-        prompt="Summarize this document by keyphrases:",
-        #task_prefix="classify:",  # T5-style task prefix
-        num_epochs=3,
-        batch_size=4,
+        output_dir=dataset_dir+"outputs/"+model_names   [1].split("/")[-1],
+        prompt="Summarize this document by unstemmed keyphrases:",
+        #task_prefix="classify:",  # T5-style task  prefix
+        num_epochs=5,
+        batch_size=4, # base-16, large-4, xl-2? for    24GB
+        learning_rate= 2e-5,
         max_input_length=512,
         max_output_length=128,
-        strict_tokenization=True
+        strict_tokenization=True,
+        fp16=False, #t5 cannot use fp16
+        bf16= True,
     )
-    
+
     # BART Configuration
     bart_config = T2TConfig(
-        model_name=model_names[3],  # Change to other models as needed
+        model_name=model_names[3],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=data_dir+"outputs/"+model_names[3].split("/")[-1],
-        prompt="Summarize this document by keyphrases:",
+        output_dir=dataset_dir+"outputs/"+model_names   [3].split("/")[-1],
+        prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,
         max_input_length=512,
         max_output_length=128,
-        strict_tokenization=True  # Apply T5-style strict standards to BART
+        learning_rate= 2e-5,
+        fp16=True,
+        bf16= False,
+        strict_tokenization=True  # Apply T5-style  strict standards to BART
     )
-    
+
     # Pegasus Configuration
     pegasus_config = T2TConfig(
-        model_name=model_names[4],  # Change to other models as needed
+        model_name=model_names[4],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=data_dir+"outputs/"+model_names[4].split("/")[-1],
-        prompt="Summarize this document by keyphrases:",
+        output_dir=dataset_dir+"outputs/"+model_names   [4].split("/")[-1],
+        prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,  # Smaller batch for Pegasus
         max_input_length=512,
         max_output_length=128,
-        strict_tokenization=True  # Apply T5-style strict standards to Pegasus
+        learning_rate= 2e-5,
+        fp16=True,
+        bf16= False,
+        strict_tokenization=True  # Apply T5-style  strict standards to Pegasus
     )
     
     # Choose configuration
