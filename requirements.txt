@@ -10,3 +10,4 @@ tensorboard==2.19.0
 ipywidgets
 peft==0.10.0
 bitsandbytes==0.46.0
+SentencePiece==0.2.0

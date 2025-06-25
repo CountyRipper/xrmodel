@@ -4,8 +4,11 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import (
     T5ForConditionalGeneration, 
     T5Tokenizer,
+    T5TokenizerFast,
     BartForConditionalGeneration,
     BartTokenizer,
+    BartTokenizerFast,
+    PegasusTokenizerFast,
     PegasusForConditionalGeneration,
     PegasusTokenizer,
     get_linear_schedule_with_warmup,
@@ -78,11 +81,11 @@ class UniversalTokenizer:
         
         # Load appropriate tokenizer
         if self.model_type == "t5":
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
+            self.tokenizer = T5TokenizerFast.from_pretrained(model_name)
         elif self.model_type == "bart":
-            self.tokenizer = BartTokenizer.from_pretrained(model_name)
+            self.tokenizer = BartTokenizerFast.from_pretrained(model_name)
         elif self.model_type == "pegasus":
-            self.tokenizer = PegasusTokenizer.from_pretrained(model_name)
+            self.tokenizer = PegasusTokenizerFast.from_pretrained(model_name)
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
         
@@ -624,17 +627,18 @@ def main():
     ]
     # T5-FLAN Configuration
     t5_config = T2TConfig(
-        model_name=model_names[1],  # Change to other   models as needed
+        model_name=model_names[0],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"/outputs/"+model_names   [1].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names[0].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         #task_prefix="classify:",  # T5-style task  prefix
         num_epochs=5,
-        batch_size=4, # base-16, large-4, xl-2? for    24GB
-        learning_rate= 2e-5,
+        batch_size=16, # base-16, large-4, xl-2? for    24GB
+        learning_rate= 5e-5,
         max_input_length=512,
         max_output_length=128,
         strict_tokenization=True,
+        warmup_ratio= 0.05,
         fp16=False, #t5 cannot use fp16
         bf16= True,
     )
@@ -643,7 +647,7 @@ def main():
     bart_config = T2TConfig(
         model_name=model_names[3],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"/outputs/"+model_names   [3].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names[3].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,
@@ -659,7 +663,7 @@ def main():
     pegasus_config = T2TConfig(
         model_name=model_names[4],  # Change to other   models as needed
         dataset_dir=dataset_dir,
-        output_dir=dataset_dir+"/outputs/"+model_names   [4].split("/")[-1],
+        output_dir=dataset_dir+"/outputs/"+model_names[4].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         num_epochs=3,
         batch_size=4,  # Smaller batch for Pegasus
