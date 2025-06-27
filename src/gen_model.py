@@ -264,13 +264,13 @@ class CustomDataset(Dataset):
         data["document"] = data["document"].astype(str).fillna("")
         data["labels"] = data["labels"].astype(str).fillna("")
         
-        # Remove empty documents (T5 strict standard)
-        data = data[data["document"].str.strip() != ""]
-        data = data[data["labels"].str.strip() != ""]
+        # # Remove empty documents (T5 strict standard)
+        # data = data[data["document"].str.strip() != ""]
+        # data = data[data["labels"].str.strip() != ""]
         
-        # Remove documents that are too short (T5 quality standard)
-        data = data[data["document"].str.len() >= 10]
-        data = data[data["labels"].str.len() >= 1]
+        # # Remove documents that are too short (T5 quality standard)
+        # data = data[data["document"].str.len() >= 2]
+        # data = data[data["labels"].str.len() >= 1]
         
         # Reset index
         data = data.reset_index(drop=True)
@@ -616,7 +616,7 @@ def main():
     
     # Example configurations for different models
     data_dir = "./xmc-base/"
-    dataset_name = "wiki10-31k"
+    dataset_name = "eurlex-4k"
     dataset_dir = data_dir+dataset_name
     model_names = [
         "google/flan-t5-base",  # T5-base
@@ -632,7 +632,7 @@ def main():
         output_dir=dataset_dir+"/outputs/"+model_names[0].split("/")[-1],
         prompt="Summarize this document by unstemmed keyphrases:",
         #task_prefix="classify:",  # T5-style task  prefix
-        num_epochs=5,
+        num_epochs=4,
         batch_size=16, # base-16, large-4, xl-2? for    24GB
         learning_rate= 5e-5,
         max_input_length=512,
